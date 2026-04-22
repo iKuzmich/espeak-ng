@@ -687,6 +687,128 @@ const char *GetTranslatedPhonemeString(int phoneme_mode)
 	return phon_out_buf;
 }
 
+static char *word_phon_out_buf = NULL;
+static unsigned int word_phon_out_size = 0;
+
+const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_start, const char *clause_end)
+{
+	if (!regular || !clause_start) return regular;
+
+	// Step 1: collect byte offsets of each whitespace-separated source word.
+	int src_offsets[N_PHONEME_LIST];
+	int n_src = 0;
+	{
+		const char *p = clause_start;
+		int in_word = 0;
+		while (*p != '\0' && (clause_end == NULL || p < clause_end)) {
+			unsigned char c = (unsigned char)*p;
+			if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+				in_word = 0;
+			} else {
+				if (!in_word) {
+					in_word = 1;
+					if (n_src < N_PHONEME_LIST)
+						src_offsets[n_src++] = (int)(p - clause_start);
+				}
+			}
+			p++;
+		}
+	}
+
+	// Step 2: collect phoneme-word byte offsets (sourceix - 1) from phoneme_list.
+	int phon_offsets[N_PHONEME_LIST];
+	int n_phon = 0;
+	for (int ix = 1; ix < n_phoneme_list - 2 && n_phon < N_PHONEME_LIST; ix++) {
+		if ((phoneme_list[ix].newword & PHLIST_START_OF_WORD) && phoneme_list[ix].sourceix > 0)
+			phon_offsets[n_phon++] = (int)(phoneme_list[ix].sourceix - 1);
+	}
+
+	// If word counts already match, no adjustment needed.
+	if (n_src <= n_phon) return regular;
+
+	// Step 3: split the regular IPA string by ASCII spaces to get per-word substrings.
+	const char *ipa_starts[N_PHONEME_LIST];
+	int ipa_lens[N_PHONEME_LIST];
+	int n_ipa = 0;
+	{
+		const char *p = regular;
+		const char *ws = p;
+		while (1) {
+			if (*p == ' ' || *p == '\0') {
+				int len = (int)(p - ws);
+				if (len > 0 && n_ipa < N_PHONEME_LIST) {
+					ipa_starts[n_ipa] = ws;
+					ipa_lens[n_ipa] = len;
+					n_ipa++;
+				}
+				if (*p == '\0') break;
+				ws = p + 1;
+			}
+			p++;
+		}
+	}
+
+	// Step 4: merge-walk source positions vs phoneme positions.
+	// For each source word: if it matches a phoneme word by byte offset, emit IPA + space;
+	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
+	int extra = n_src - n_phon;
+	size_t reg_len = strlen(regular);
+	size_t needed = reg_len + (size_t)extra + 2;
+
+	if (word_phon_out_size < (unsigned int)needed) {
+		char *nb = (char *)realloc(word_phon_out_buf, needed);
+		if (!nb) return regular;
+		word_phon_out_buf = nb;
+		word_phon_out_size = (unsigned int)needed;
+	}
+
+	char *out = word_phon_out_buf;
+	int si = 0, pi = 0, ii = 0;
+
+	while (si < n_src) {
+		if (pi < n_phon && phon_offsets[pi] <= src_offsets[si]) {
+			if (phon_offsets[pi] == src_offsets[si]) {
+				// Matched source word -> emit its IPA substring + space.
+				if (ii < n_ipa) {
+					memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
+					out += ipa_lens[ii];
+					ii++;
+				}
+				*out++ = ' ';
+				si++;
+				pi++;
+			} else {
+				// Phoneme word precedes current source word (expansion edge case):
+				// emit its IPA + space without consuming a source word slot.
+				if (ii < n_ipa) {
+					memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
+					out += ipa_lens[ii];
+					ii++;
+				}
+				*out++ = ' ';
+				pi++;
+			}
+		} else {
+			// Source word has no matching phoneme word (merged/skipped): empty slot.
+			*out++ = ' ';
+			si++;
+		}
+	}
+	// Emit any remaining phoneme words (safety net).
+	while (pi < n_phon) {
+		if (ii < n_ipa) {
+			memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
+			out += ipa_lens[ii];
+			ii++;
+		}
+		*out++ = ' ';
+		pi++;
+	}
+
+	*out = '\0';
+	return word_phon_out_buf;
+}
+
 static int LetterGroupNo(char *rule)
 {
 	/*

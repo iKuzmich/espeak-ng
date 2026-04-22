@@ -852,7 +852,7 @@ ESPEAK_API void espeak_SetPhonemeTrace(int phonememode, FILE *stream)
 		f_trans = stderr;
 }
 
-ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr, int textmode, int phonememode, int* terminator)
+ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr, int textmode, int phonememode, int* terminator, const char** word_phonemes_out)
 {
 	/* phoneme_mode
 	    bit 1:   0=eSpeak's ascii phoneme names, 1= International Phonetic Alphabet (as UTF-8 characters).
@@ -863,18 +863,29 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 	if (p_decoder == NULL)
 		p_decoder = create_text_decoder();
 
+	// Save clause start for word-alignment word counting (byte-oriented encodings only).
+	const char *clause_start = (textmode != espeakCHARS_WCHAR && textmode != espeakCHARS_16BIT)
+		? (const char *)*textptr : NULL;
+
 	if (text_decoder_decode_string_multibyte(p_decoder, *textptr, translator->encoding, textmode) != ENS_OK)
 		return NULL;
 
 	TranslateClauseWithTerminator(translator, NULL, NULL, terminator);
 	*textptr = text_decoder_get_buffer(p_decoder);
 
-	return GetTranslatedPhonemeString(phonememode);
+	const char *phonemes = GetTranslatedPhonemeString(phonememode);
+
+	if (word_phonemes_out) {
+		const char *clause_end = (*textptr != NULL) ? (const char *)*textptr : NULL;
+		*word_phonemes_out = GetWordAlignedPhonemeString(phonemes, clause_start, clause_end);
+	}
+
+	return phonemes;
 }
 
 ESPEAK_API const char *espeak_TextToPhonemes(const void **textptr, int textmode, int phonememode)
 {
-	return espeak_TextToPhonemesWithTerminator(textptr, textmode, phonememode, NULL);
+	return espeak_TextToPhonemesWithTerminator(textptr, textmode, phonememode, NULL, NULL);
 }
 
 ESPEAK_NG_API espeak_ng_STATUS espeak_ng_Cancel(void)

@@ -544,8 +544,12 @@ ESPEAK_API const char *espeak_TextToPhonemes(const void **textptr, int textmode,
 #ifdef __cplusplus
 extern "C"
 #endif
-ESPEAK_API const char *espeak_TextToPhonemesWithTerminator(const void **textptr, int textmode, int phonememode, int *terminator);
-/* Version of espeak_TextToPhonemes that also returns the clause terminator (e.g., CLAUSE_INTONATION_FULL_STOP) */
+ESPEAK_API const char *espeak_TextToPhonemesWithTerminator(const void **textptr, int textmode, int phonememode, int *terminator, const char **word_phonemes_out);
+/* Version of espeak_TextToPhonemes that also returns the clause terminator.
+   word_phonemes_out: if non-NULL, receives a phoneme string with the same content as the
+   return value but padded with extra spaces so that the number of whitespace-separated word
+   groups matches the number of whitespace-separated tokens in the original source text.
+   This allows callers to maintain per-word alignment even when espeak merges adjacent words. */
 
 #ifdef __cplusplus
 extern "C"
