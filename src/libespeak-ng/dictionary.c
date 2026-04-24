@@ -715,12 +715,14 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 		}
 	}
 
-	// Step 2: collect phoneme-word byte offsets (sourceix - 1) from phoneme_list.
+	// Step 2: collect phoneme-word char offsets from phoneme_list.
+	// sourceix is packed: bits 0-10 = clause-relative char offset, bits 11-15 = word length.
+	// Extract the char offset with & 0x7ff (no -1: it is 0-indexed from clause start).
 	int phon_offsets[N_PHONEME_LIST];
 	int n_phon = 0;
 	for (int ix = 1; ix < n_phoneme_list - 2 && n_phon < N_PHONEME_LIST; ix++) {
 		if ((phoneme_list[ix].newword & PHLIST_START_OF_WORD) && phoneme_list[ix].sourceix > 0)
-			phon_offsets[n_phon++] = (int)(phoneme_list[ix].sourceix - 1);
+			phon_offsets[n_phon++] = (int)(phoneme_list[ix].sourceix & 0x7ff);
 	}
 
 	// If word counts already match, no adjustment needed.
@@ -753,7 +755,9 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
 	int extra = n_src - n_phon;
 	size_t reg_len = strlen(regular);
-	size_t needed = reg_len + (size_t)extra + 2;
+	// Worst-case output: n_src trailing spaces (one per source word) + all IPA chars + null.
+	// The simple reg_len+extra+2 is too small if the safety-net loop fires after zero matches.
+	size_t needed = reg_len + (size_t)n_src + 2;
 
 	if (word_phon_out_size < (unsigned int)needed) {
 		char *nb = (char *)realloc(word_phon_out_buf, needed);
