@@ -45,6 +45,33 @@ compiled_test(encoding)
 compiled_test(ieee80)
 compiled_test(readclause)
 
+# Debug tool: built with `cmake --build build --target tests` but not registered as a CTest.
+# Run manually: ESPEAK_DATA_PATH=$(pwd)/build build/tests/test_text_to_phonemes [lang [text]]
+macro(debug_tool _tool_name)
+  add_executable(test_${_tool_name}
+    $<TARGET_OBJECTS:espeak-ng>
+    ${_tool_name}.c
+  )
+  target_link_libraries(test_${_tool_name} PRIVATE
+    $<TARGET_PROPERTY:espeak-ng,LINK_LIBRARIES>
+  )
+  target_compile_definitions(test_${_tool_name} PRIVATE LIBESPEAK_NG_EXPORT=1)
+  target_include_directories(
+    test_${_tool_name} PRIVATE
+    $<TARGET_PROPERTY:espeak-ng,SOURCE_DIR>
+    $<TARGET_PROPERTY:espeak-ng,SOURCE_DIR>/include/compat
+    $<TARGET_PROPERTY:espeak-ng,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:espeak-ng-config,INTERFACE_INCLUDE_DIRECTORIES>
+  )
+  if (MINGW)
+    target_link_options(test_${_tool_name} PUBLIC "-static" "-static-libstdc++")
+  endif()
+  add_dependencies(test_${_tool_name} data)
+  list(APPEND _binary_tests test_${_tool_name})
+endmacro(debug_tool)
+
+debug_tool(text_to_phonemes)
+
 if (SHELL AND UNIX)
 
 shell_test(bom)
