@@ -694,21 +694,30 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 {
 	if (!regular || !clause_start) return regular;
 
-	// Step 1: collect byte offsets of each whitespace-separated source word.
+	// Step 1: collect 1-indexed char positions of whitespace-separated source words.
+	// sourceix & 0x7ff uses count_characters - clause_start_char, which is 1-indexed
+	// (count_characters is incremented before returning each character in ReadClause).
+	// We must count characters the same way: increment before checking, skip UTF-8
+	// continuation bytes (0x80-0xBF) so multi-byte chars count as one.
 	int src_offsets[N_PHONEME_LIST];
 	int n_src = 0;
 	{
 		const char *p = clause_start;
+		int char_count = 0;
 		int in_word = 0;
 		while (*p != '\0' && (clause_end == NULL || p < clause_end)) {
 			unsigned char c = (unsigned char)*p;
-			if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-				in_word = 0;
-			} else {
-				if (!in_word) {
-					in_word = 1;
-					if (n_src < N_PHONEME_LIST)
-						src_offsets[n_src++] = (int)(p - clause_start);
+			if ((c & 0xC0) != 0x80) {
+				// First byte of a UTF-8 sequence (or plain ASCII).
+				char_count++; // 1-indexed, matches count_characters increment-before-return
+				if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+					in_word = 0;
+				} else {
+					if (!in_word) {
+						in_word = 1;
+						if (n_src < N_PHONEME_LIST)
+							src_offsets[n_src++] = char_count;
+					}
 				}
 			}
 			p++;
@@ -716,8 +725,8 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	}
 
 	// Step 2: collect phoneme-word char offsets from phoneme_list.
-	// sourceix is packed: bits 0-10 = clause-relative char offset, bits 11-15 = word length.
-	// Extract the char offset with & 0x7ff (no -1: it is 0-indexed from clause start).
+	// sourceix is packed: bits 0-10 = 1-indexed clause-relative char count,
+	// bits 11-15 = word length. Extract the char count with & 0x7ff.
 	int phon_offsets[N_PHONEME_LIST];
 	int n_phon = 0;
 	for (int ix = 1; ix < n_phoneme_list - 2 && n_phon < N_PHONEME_LIST; ix++) {
@@ -751,7 +760,7 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	}
 
 	// Step 4: merge-walk source positions vs phoneme positions.
-	// For each source word: if it matches a phoneme word by byte offset, emit IPA + space;
+	// For each source word: if it matches a phoneme word by char count, emit IPA + space;
 	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
 	int extra = n_src - n_phon;
 	size_t reg_len = strlen(regular);
@@ -808,6 +817,10 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 		*out++ = ' ';
 		pi++;
 	}
+
+	// Strip trailing space: format is IPA groups separated (not terminated) by spaces.
+	if (out > word_phon_out_buf && *(out - 1) == ' ')
+		out--;
 
 	*out = '\0';
 	return word_phon_out_buf;
