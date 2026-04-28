@@ -716,7 +716,7 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 					if (!in_word) {
 						in_word = 1;
 						if (n_src < N_PHONEME_LIST)
-							src_offsets[n_src++] = char_count;
+							src_offsets[n_src++] = char_count + 1;
 					}
 				}
 			}
