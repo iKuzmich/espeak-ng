@@ -166,6 +166,12 @@ static void UngetC(int c)
 	ungot_char = c;
 }
 
+int ReadClausePendingChars(void)
+{
+	// Lookahead chars read past the end of the last clause, replayed at the start of the next one
+	return (ungot_char2 != 0) + (ungot_char != 0);
+}
+
 const char *WordToString2(char buf[5], unsigned int word)
 {
 	// Convert a language mnemonic word into a string

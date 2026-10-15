@@ -852,6 +852,21 @@ ESPEAK_API void espeak_SetPhonemeTrace(int phonememode, FILE *stream)
 		f_trans = stderr;
 }
 
+// ReadClause reads one char past a clause end (to decide whether "." ends a sentence) and replays it at the
+// start of the next clause. For word-alignment counting that char belongs to the next clause's source text.
+static const char *carried_clause_start = NULL;
+static const void *carried_clause_textptr = NULL;
+
+static const char *StepBackUtf8Chars(const char *p, const char *limit, int count)
+{
+	while (count-- > 0 && p > limit) {
+		p--;
+		while (p > limit && ((unsigned char)*p & 0xC0) == 0x80)
+			p--;
+	}
+	return p;
+}
+
 ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr, int textmode, int phonememode, int* terminator, const char** word_phonemes_out)
 {
 	/* phoneme_mode
@@ -866,6 +881,10 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 	// Save clause start for word-alignment word counting (byte-oriented encodings only).
 	const char *clause_start = (textmode != espeakCHARS_WCHAR && textmode != espeakCHARS_16BIT)
 		? (const char *)*textptr : NULL;
+	if (clause_start != NULL && carried_clause_start != NULL && carried_clause_textptr == *textptr)
+		clause_start = carried_clause_start;
+	carried_clause_start = NULL;
+	carried_clause_textptr = NULL;
 
 	if (text_decoder_decode_string_multibyte(p_decoder, *textptr, translator->encoding, textmode) != ENS_OK)
 		return NULL;
@@ -873,10 +892,16 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 	TranslateClauseWithTerminator(translator, NULL, NULL, terminator);
 	*textptr = text_decoder_get_buffer(p_decoder);
 
+	const char *clause_end = (*textptr != NULL) ? (const char *)*textptr : NULL;
+	if (clause_start != NULL && clause_end != NULL) {
+		clause_end = StepBackUtf8Chars(clause_end, clause_start, ReadClausePendingChars());
+		carried_clause_start = clause_end;
+		carried_clause_textptr = *textptr;
+	}
+
 	const char *phonemes = GetTranslatedPhonemeString(phonememode);
 
 	if (word_phonemes_out) {
-		const char *clause_end = (*textptr != NULL) ? (const char *)*textptr : NULL;
 		*word_phonemes_out = GetWordAlignedPhonemeString(phonemes, clause_start, clause_end);
 	}
 

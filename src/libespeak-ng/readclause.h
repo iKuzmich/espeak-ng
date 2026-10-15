@@ -46,6 +46,7 @@ int ReadClause(Translator *tr,
 		int n_buf,
 		int *tone_type,
 		char *voice_change);
+int ReadClausePendingChars(void);
 
 
 

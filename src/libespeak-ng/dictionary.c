@@ -727,15 +727,19 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	// Step 2: collect phoneme-word char offsets from phoneme_list.
 	// sourceix is packed: bits 0-10 = 1-indexed clause-relative char count,
 	// bits 11-15 = word length. Extract the char count with & 0x7ff.
+	// Every START_OF_WORD is kept so phoneme words pair 1:1 with the IPA substrings of Step 3;
+	// a word espeak inserted itself (sourceix 0) continues the source word of the previous one.
 	int phon_offsets[N_PHONEME_LIST];
 	int n_phon = 0;
 	for (int ix = 1; ix < n_phoneme_list - 2 && n_phon < N_PHONEME_LIST; ix++) {
-		if ((phoneme_list[ix].newword & PHLIST_START_OF_WORD) && phoneme_list[ix].sourceix > 0)
-			phon_offsets[n_phon++] = (int)(phoneme_list[ix].sourceix & 0x7ff);
+		if (phoneme_list[ix].newword & PHLIST_START_OF_WORD) {
+			int offset = (int)(phoneme_list[ix].sourceix & 0x7ff);
+			phon_offsets[n_phon] = (offset > 0 || n_phon == 0) ? offset : phon_offsets[n_phon - 1];
+			n_phon++;
+		}
 	}
-
-	// If word counts already match, no adjustment needed.
-	if (n_src <= n_phon) return regular;
+	
+	if (n_src == 0 || n_phon == 0) return regular;
 
 	// Step 3: split the regular IPA string by ASCII spaces to get per-word substrings.
 	const char *ipa_starts[N_PHONEME_LIST];
@@ -759,7 +763,56 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 		}
 	}
 
-	// Step 4: merge-walk source positions vs phoneme positions.
+	// Phoneme words without their own IPA substring cannot be placed: keep the regular string.
+	if (n_ipa != n_phon) return regular;
+
+	// Step 3.1: calibrate the sourceix base. The first clause of a text counts its first char as 2 (hence the +1
+	// in Step 1), a clause starting with the lookahead char ReadClause carried over counts it as 1.
+	// Take the shift giving the most exact source/phoneme word start matches.
+	static const int shifts[] = { 0, -1, 1, -2, 2 };
+	int shift = 0;
+	int best_matches = -1;
+	for (int s = 0; s < (int)(sizeof(shifts) / sizeof(shifts[0])); s++) {
+		int matches = 0;
+		int si = 0, pi = 0;
+		while (si < n_src && pi < n_phon) {
+			int so = src_offsets[si] + shifts[s];
+			if (so == phon_offsets[pi]) {
+				matches++;
+				si++;
+				pi++;
+			} else if (so < phon_offsets[pi]) {
+				si++;
+			} else {
+				pi++;
+			}
+		}
+		if (matches > best_matches) {
+			best_matches = matches;
+			shift = shifts[s];
+		}
+	}
+
+	// Step 3.2: owner source word of each phoneme word = the one whose span contains its offset.
+	// Expanded numbers/abbreviations give several phoneme words per source word, merged words none.
+	// Owners only grow, so the aligned string is the regular one with separators added or removed only.
+	int owners[N_PHONEME_LIST];
+	int identity = (n_src == n_phon);
+	{
+		int si = 0;
+		for (int pi = 0; pi < n_phon; pi++) {
+			while (si + 1 < n_src && src_offsets[si + 1] + shift <= phon_offsets[pi])
+				si++;
+			owners[pi] = si;
+			if (si != pi)
+				identity = 0;
+		}
+	}
+
+	// If word counts already match, no adjustment needed.
+	if (identity) return regular;
+
+	// Step 4: emit exactly one space-separated group per source word.
 	// For each source word: if it matches a phoneme word by char count, emit IPA + space;
 	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
 	int extra = n_src - n_phon;
@@ -779,33 +832,20 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	int si = 0, pi = 0, ii = 0;
 
 	while (si < n_src) {
-		if (pi < n_phon && phon_offsets[pi] <= src_offsets[si]) {
-			if (phon_offsets[pi] == src_offsets[si]) {
-				// Matched source word -> emit its IPA substring + space.
-				if (ii < n_ipa) {
-					memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
-					out += ipa_lens[ii];
-					ii++;
-				}
-				*out++ = ' ';
-				si++;
-				pi++;
-			} else {
-				// Phoneme word precedes current source word (expansion edge case):
-				// emit its IPA + space without consuming a source word slot.
-				if (ii < n_ipa) {
-					memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
-					out += ipa_lens[ii];
-					ii++;
-				}
-				*out++ = ' ';
-				pi++;
+		// Matched source word -> emit its IPA substring + space.
+		// Further phoneme words of the same source word (expansion edge case) are joined
+		// without a separator, so they don't consume the next source word slot.
+		while (pi < n_phon && owners[pi] == si) {
+			if (ii < n_ipa) {
+				memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
+				out += ipa_lens[ii];
+				ii++;
 			}
-		} else {
-			// Source word has no matching phoneme word (merged/skipped): empty slot.
-			*out++ = ' ';
-			si++;
+			pi++;
 		}
+		// Source word has no matching phoneme word (merged/skipped): bare space = empty slot.
+		*out++ = ' ';
+		si++;
 	}
 	// Emit any remaining phoneme words (safety net).
 	while (pi < n_phon) {
