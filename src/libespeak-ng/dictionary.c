@@ -815,10 +815,8 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	// Step 4: emit exactly one space-separated group per source word.
 	// For each source word: if it matches a phoneme word by char count, emit IPA + space;
 	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
-	int extra = n_src - n_phon;
 	size_t reg_len = strlen(regular);
 	// Worst-case output: n_src trailing spaces (one per source word) + all IPA chars + null.
-	// The simple reg_len+extra+2 is too small if the safety-net loop fires after zero matches.
 	size_t needed = reg_len + (size_t)n_src + 2;
 
 	if (word_phon_out_size < (unsigned int)needed) {

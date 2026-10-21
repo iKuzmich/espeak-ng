@@ -46,7 +46,7 @@ compiled_test(ieee80)
 compiled_test(readclause)
 
 # Debug tool: built with `cmake --build build --target tests` but not registered as a CTest.
-# Run manually: ESPEAK_DATA_PATH=$(pwd)/build build/tests/test_text_to_phonemes [lang [text]]
+# Run manually: ESPEAK_DATA_PATH=$(pwd)/build build/tests/test_text_to_phonemes [lang [text...]]
 macro(debug_tool _tool_name)
   add_executable(test_${_tool_name}
     $<TARGET_OBJECTS:espeak-ng>
