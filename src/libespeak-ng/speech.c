@@ -932,8 +932,13 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 	// Save clause start for word-alignment word counting (byte-oriented encodings only).
 	const char *clause_start = (textmode != espeakCHARS_WCHAR && textmode != espeakCHARS_16BIT)
 		? (const char *)*textptr : NULL;
-	if (clause_start != NULL && carried_clause_start != NULL && carried_clause_textptr == *textptr)
+	// chars replayed from another text are not in the slice but still come before it in sourceix
+	int replayed_outside = 0;
+	if (clause_start != NULL && carried_clause_start != NULL && carried_clause_textptr == *textptr) {
 		clause_start = carried_clause_start;
+	} else {
+		replayed_outside = ReadClausePendingChars();
+	}
 	carried_clause_start = NULL;
 	carried_clause_textptr = NULL;
 
@@ -953,7 +958,7 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 	const char *phonemes = GetTranslatedPhonemeString(phonememode);
 
 	if (word_phonemes_out) {
-		*word_phonemes_out = GetWordAlignedPhonemeString(phonemes, clause_start, clause_end);
+		*word_phonemes_out = GetWordAlignedPhonemeString(phonemes, clause_start, clause_end, ReadClauseSourceBase() + replayed_outside);
 	}
 
 	return phonemes;

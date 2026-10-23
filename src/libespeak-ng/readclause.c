@@ -172,6 +172,14 @@ int ReadClausePendingChars(void)
 	return (ungot_char2 != 0) + (ungot_char != 0);
 }
 
+static int clause_source_base = 2;
+
+int ReadClauseSourceBase(void)
+{
+	// charix value (word sourceix) of the first source char of the last clause read, the first replayed char if any
+	return clause_source_base;
+}
+
 const char *WordToString2(char buf[5], unsigned int word)
 {
 	// Convert a language mnemonic word into a string
@@ -519,6 +527,10 @@ int ReadClause(Translator *tr, char *buf, short *charix, int *charix_top, int n_
 	tr->clause_lower_count = 0;
 	*tone_type = 0;
 	*voice_change = 0;
+
+	// A char is stored once the lookahead after it is counted (+2 for the first one), replayed chars were counted by the
+	// previous clause; the count_characters term covers clause_start_char clamped to 0 while count_characters is -1 after InitText2
+	clause_source_base = count_characters - clause_start_char + 2 - ReadClausePendingChars();
 
 	if (ungot_char2 != 0) {
 		c2 = ungot_char2;

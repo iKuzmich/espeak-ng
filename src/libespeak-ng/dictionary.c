@@ -690,7 +690,7 @@ const char *GetTranslatedPhonemeString(int phoneme_mode)
 static char *word_phon_out_buf = NULL;
 static unsigned int word_phon_out_size = 0;
 
-const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_start, const char *clause_end)
+const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_start, const char *clause_end, int source_base)
 {
 	if (!regular || !clause_start) return regular;
 
@@ -699,6 +699,8 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	// (count_characters is incremented before returning each character in ReadClause).
 	// We must count characters the same way: increment before checking, skip UTF-8
 	// continuation bytes (0x80-0xBF) so multi-byte chars count as one.
+	// source_base is the sourceix of the char at clause_start (ReadClauseSourceBase), so a word
+	// starting at char char_count gets source_base + char_count - 1.
 	int src_offsets[N_PHONEME_LIST];
 	int n_src = 0;
 	{
@@ -716,7 +718,7 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 					if (!in_word) {
 						in_word = 1;
 						if (n_src < N_PHONEME_LIST)
-							src_offsets[n_src++] = char_count + 1;
+							src_offsets[n_src++] = source_base + char_count - 1;
 					}
 				}
 			}
@@ -766,34 +768,7 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	// Phoneme words without their own IPA substring cannot be placed: keep the regular string.
 	if (n_ipa != n_phon) return regular;
 
-	// Step 3.1: calibrate the sourceix base. The first clause of a text counts its first char as 2 (hence the +1
-	// in Step 1), a clause starting with the lookahead char ReadClause carried over counts it as 1.
-	// Take the shift giving the most exact source/phoneme word start matches.
-	static const int shifts[] = { 0, -1, 1, -2, 2 };
-	int shift = 0;
-	int best_matches = -1;
-	for (int s = 0; s < (int)(sizeof(shifts) / sizeof(shifts[0])); s++) {
-		int matches = 0;
-		int si = 0, pi = 0;
-		while (si < n_src && pi < n_phon) {
-			int so = src_offsets[si] + shifts[s];
-			if (so == phon_offsets[pi]) {
-				matches++;
-				si++;
-				pi++;
-			} else if (so < phon_offsets[pi]) {
-				si++;
-			} else {
-				pi++;
-			}
-		}
-		if (matches > best_matches) {
-			best_matches = matches;
-			shift = shifts[s];
-		}
-	}
-
-	// Step 3.2: owner source word of each phoneme word = the one whose span contains its offset.
+	// Step 3.1: owner source word of each phoneme word = the one whose span contains its offset.
 	// Expanded numbers/abbreviations give several phoneme words per source word, merged words none.
 	// Owners only grow, so the aligned string is the regular one with separators added or removed only.
 	int owners[N_PHONEME_LIST];
@@ -801,7 +776,7 @@ const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_
 	{
 		int si = 0;
 		for (int pi = 0; pi < n_phon; pi++) {
-			while (si + 1 < n_src && src_offsets[si + 1] + shift <= phon_offsets[pi])
+			while (si + 1 < n_src && src_offsets[si + 1] <= phon_offsets[pi])
 				si++;
 			owners[pi] = si;
 			if (si != pi)
