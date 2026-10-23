@@ -215,6 +215,26 @@ espeak_ng_SetConstF0(int f0);
 ESPEAK_NG_API espeak_ng_STATUS
 espeak_ng_SetRandSeed(long seed);
 
+/* Phonemizer-only API (Piper) */
+
+/* Initializes only what espeak_TextToPhonemes / espeak_TextToPhonemesWithTerminator need:
+   data path, UTF-8 LC_CTYPE, phoneme data, voices list and text decoder. If voice_name is
+   non-empty it is selected with espeak_ng_SetPhonemizerVoiceByName, creating the translator.
+   No audio output is set up, so espeak_Synth / espeak_ng_Synthesize must not be used.
+   Never calls exit(). ENS_VOICE_NOT_FOUND means only the voice selection failed and the
+   phonemizer itself is initialized. Not thread-safe: all eSpeak state is process-global. */
+ESPEAK_NG_API espeak_ng_STATUS
+espeak_ng_InitializePhonemizer(const char *path,
+                               const char *voice_name,
+                               espeak_ng_ERROR_CONTEXT *context);
+
+/* espeak_ng_SetVoiceByName for phonemization: loads the language translator, its dictionary
+   and phoneme table without queueing the voice for the waveform generator (which would leak
+   it when no audio is synthesized). A "+variant" suffix is ignored. Returns ENS_VOICE_NOT_FOUND
+   when the voice or its dictionary cannot be loaded. */
+ESPEAK_NG_API espeak_ng_STATUS
+espeak_ng_SetPhonemizerVoiceByName(const char *name);
+
 
 #ifdef __cplusplus
 }

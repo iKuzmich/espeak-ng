@@ -180,8 +180,8 @@ static int run_phoneme_mode(const char *lang, const char *text, int phonememode,
 {
 	printf("--- %s ---\n", label);
 
-	if (espeak_SetVoiceByName(lang) != EE_OK) {
-		fprintf(stderr, "  espeak_SetVoiceByName(\"%s\") failed\n", lang);
+	if (espeak_ng_SetPhonemizerVoiceByName(lang) != ENS_OK) {
+		fprintf(stderr, "  espeak_ng_SetPhonemizerVoiceByName(\"%s\") failed\n", lang);
 		return 1;
 	}
 
@@ -282,14 +282,11 @@ int main(int argc, char **argv)
 	printf("espeak_TextToPhonemesWithTerminator debug\n");
 	printf("  lang : \"%s\"\n\n", lang);
 
-	espeak_ng_InitializePath(NULL);
 	espeak_ng_ERROR_CONTEXT ctx = NULL;
-	if (espeak_ng_Initialize(&ctx) != ENS_OK) {
-		fprintf(stderr, "espeak_ng_Initialize failed\n");
-		return EXIT_FAILURE;
-	}
-	if (espeak_ng_InitializeOutput(ENOUTPUT_MODE_SYNCHRONOUS, 0, NULL) != ENS_OK) {
-		fprintf(stderr, "espeak_ng_InitializeOutput failed\n");
+	espeak_ng_STATUS status = espeak_ng_InitializePhonemizer(NULL, NULL, &ctx);
+	if (status != ENS_OK) {
+		espeak_ng_PrintStatusCodeMessage(status, stderr, ctx);
+		espeak_ng_ClearErrorContext(&ctx);
 		return EXIT_FAILURE;
 	}
 

@@ -739,6 +739,7 @@ voice_t *LoadVoice(const char *vname, int control)
 			LoadDictionary(translator, new_dictionary, control & 4);
 			if (dictionary_name[0] == 0) {
 				DeleteTranslator(translator);
+				translator = NULL; // otherwise the next LoadVoice or espeak_Terminate frees it again
 				return NULL; // no dictionary loaded
 			}
 		}
@@ -1339,6 +1340,48 @@ ESPEAK_NG_API espeak_ng_STATUS espeak_ng_SetVoiceByName(const char *name)
 		}
 	}
 	return ENS_VOICE_NOT_FOUND;
+}
+
+ESPEAK_NG_API espeak_ng_STATUS espeak_ng_SetPhonemizerVoiceByName(const char *name)
+{
+	// espeak_ng_SetVoiceByName reduced to the translator, dictionary and phoneme table.
+	// Skips DoVoiceChange: its voice copy is freed only by the waveform generator, so each call would leak it.
+	// Also skips the "+variant" voice (tone only) and the SSML voice stack.
+	espeak_VOICE *v;
+	int ix;
+	char buf[60];
+
+	if (name == NULL) {
+		return ENS_VOICE_NOT_FOUND;
+	}
+
+	strncpy0(buf, name, sizeof(buf));
+	ExtractVoiceVariantName(buf, 0, 1); // cuts the "+variant" suffix off buf
+
+	for (ix = 0;; ix++) {
+		// convert voice name to lower case  (ascii)
+		if ((buf[ix] = tolower(buf[ix])) == 0) {
+			break;
+		}
+	}
+
+	voice_t *loaded = LoadVoice(buf, 1);
+	if (loaded == NULL) {
+		if (n_voices_list == 0) {
+			espeak_ListVoices(NULL); // create the voices list
+		}
+
+		if ((v = SelectVoiceByName(voices_list, buf)) != NULL) {
+			loaded = LoadVoice(v->identifier, 0);
+		}
+	}
+
+	// LoadVoice only warns about a missing _dict file, but word lookups need it
+	if (loaded == NULL || translator == NULL || translator->data_dictlist == NULL) {
+		return ENS_VOICE_NOT_FOUND;
+	}
+
+	return ENS_OK;
 }
 
 ESPEAK_NG_API espeak_ng_STATUS espeak_ng_SetVoiceByProperties(espeak_VOICE *voice_selector)

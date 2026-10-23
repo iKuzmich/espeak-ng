@@ -405,6 +405,57 @@ ESPEAK_NG_API espeak_ng_STATUS espeak_ng_Initialize(espeak_ng_ERROR_CONTEXT *con
 	return ENS_OK;
 }
 
+ESPEAK_NG_API espeak_ng_STATUS espeak_ng_InitializePhonemizer(const char *path, const char *voice_name, espeak_ng_ERROR_CONTEXT *context)
+{
+	// Text-to-phonemes subset of espeak_Initialize for hosts with their own synthesizer (Piper).
+	// Skipped as synthesis-only: output buffer and event list, audio device, async fifo, the optional
+	// config file (tones, sound icons), SSML voice stack and mark names, rate/volume, random seed.
+	int srate = 22050;
+
+	espeak_ng_InitializePath(path);
+
+	// the translator classifies characters with iswalpha() etc., see espeak_ng_Initialize
+	if (setlocale(LC_CTYPE, "C.UTF-8") == NULL) {
+		if (setlocale(LC_CTYPE, "UTF-8") == NULL) {
+			if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL) {
+				setlocale(LC_CTYPE, "");
+			}
+		}
+	}
+
+	// LoadPhData alone keeps the cached phoneme table selection, pointing into the replaced data on re-initialization
+	FreePhData();
+	espeak_ng_STATUS result = LoadPhData(&srate, context);
+	if (result != ENS_OK) {
+		return result;
+	}
+
+	// VoiceReset, run on every voice load, divides by the sample rate set here
+	WavegenInit(srate, 0);
+
+	// options read during text translation; SetParameter would not apply the first two, InitText2 does that on synthesis
+	option_punctuation = param_defaults[espeakPUNCTUATION];
+	option_capitals = param_defaults[espeakCAPITALS];
+	option_wordgap = param_defaults[espeakWORDGAP];
+	option_phonemes = 0;
+
+	// language voices such as "en-us" have no file of that name and resolve through this list
+	espeak_ListVoices(NULL);
+
+	if (p_decoder == NULL) {
+		p_decoder = create_text_decoder();
+		if (p_decoder == NULL) {
+			return ENOMEM;
+		}
+	}
+
+	if (voice_name != NULL && voice_name[0] != 0) {
+		return espeak_ng_SetPhonemizerVoiceByName(voice_name);
+	}
+
+	return ENS_OK;
+}
+
 ESPEAK_NG_API espeak_ng_STATUS espeak_ng_SetPhonemeEvents(int enable, int ipa) {
 	option_phoneme_events = 0;
 	if (enable) {
