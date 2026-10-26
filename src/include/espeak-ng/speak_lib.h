@@ -541,15 +541,22 @@ ESPEAK_API const char *espeak_TextToPhonemes(const void **textptr, int textmode,
 
 */
 
+typedef struct {
+	int count;                  /* space-separated groups of the returned phoneme string, empty groups included */
+	const char *const *sources; /* sources[i]: start of the source text of group i inside the caller's text */
+} espeak_PHONEME_WORDS;
+
 #ifdef __cplusplus
 extern "C"
 #endif
-ESPEAK_API const char *espeak_TextToPhonemesWithTerminator(const void **textptr, int textmode, int phonememode, int *terminator, const char **word_phonemes_out);
+ESPEAK_API const char *espeak_TextToPhonemesWithTerminator(const void **textptr, int textmode, int phonememode, int *terminator, espeak_PHONEME_WORDS *words_out);
 /* Version of espeak_TextToPhonemes that also returns the clause terminator.
-   word_phonemes_out: if non-NULL, receives a phoneme string with the same content as the
-   return value but padded with extra spaces so that the number of whitespace-separated word
-   groups matches the number of whitespace-separated tokens in the original source text.
-   This allows callers to maintain per-word alignment even when espeak merges adjacent words. */
+   words_out: if non-NULL, receives the source text position of each space-separated word group
+   of the returned phonemes, so callers can map phoneme words back to the words of their text
+   (several groups per word for expanded numbers, none for words espeak merged into the previous one).
+   The source of a clause may start before *textptr with the lookahead char of the previous clause.
+   count is 0 for espeakCHARS_WCHAR / espeakCHARS_16BIT text, or when the phoneme separator or tie
+   (phonememode bits 8-23) is a space. sources is valid until the next call. */
 
 #ifdef __cplusplus
 extern "C"

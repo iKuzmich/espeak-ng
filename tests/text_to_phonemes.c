@@ -4,16 +4,18 @@
  * Usage: test_text_to_phonemes [lang [text...]]
  * Defaults: lang=en, text=built-in samples (clause lookahead, merged words, expanded numbers)
  *
- * Prints per-clause phonemes, word-aligned phonemes, and the terminator
+ * Prints per-clause phonemes, the text atom each phoneme word group comes from, and the terminator
  * bitmask decoded into human-readable fields.
  *
- * The clause loop and sentence assembly mirror libpiper piper_synthesize_start, so the
- * per-sentence strings are the ones PiperNativeWrapper/AlignmentCalculator receive.
- * Each clause must yield one aligned group per source word; exits non-zero otherwise.
+ * The clause loop and sentence assembly mirror libpiper piper_synthesize_start: a group is owned by
+ * the ' '-separated atom of the whole text its source pointer falls into (Skidbladnir's CharPos atoms).
+ * Exits non-zero when groups don't match the phoneme spaces, a source leaves its clause or points
+ * at whitespace (sourceix base off), or atoms go backwards.
  */
 
 #include "config.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,35 +57,35 @@ static void strbuf_clear(strbuf *sb)
 	}
 }
 
-// Same source word split as GetWordAlignedPhonemeString Step 1.
-static int count_source_words(const char *start, const char *end)
+static int count_spaces(const char *s)
 {
 	int n = 0;
-	int in_word = 0;
-	for (const char *p = start; *p != '\0' && (end == NULL || p < end); p++) {
-		if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
-			in_word = 0;
-		} else if (!in_word) {
-			in_word = 1;
-			n++;
-		}
-	}
-	return n;
-}
-
-// Groups are separated (not terminated) by single spaces; an empty slot shows up as consecutive spaces.
-static int count_aligned_groups(const char *s)
-{
-	if (s == NULL || *s == '\0') {
-		return 0;
-	}
-	int n = 1;
 	for (; *s != '\0'; s++) {
 		if (*s == ' ') {
 			n++;
 		}
 	}
 	return n;
+}
+
+// Index of the ' '-separated atom of text containing p, as libpiper maps a group source.
+static int atom_index(const char *text, const char *p)
+{
+	int n = 0;
+	for (const char *q = text; q < p && *q != '\0'; q++) {
+		if (*q == ' ') {
+			n++;
+		}
+	}
+	return n;
+}
+
+static const char *atom_start(const char *text, const char *p)
+{
+	while (p > text && p[-1] != ' ') {
+		p--;
+	}
+	return p;
 }
 
 // Same clause boundary as espeak_TextToPhonemesWithTerminator: lookahead chars ReadClause replays
@@ -121,21 +123,15 @@ static const char *terminator_str(int term)
 	return "";
 }
 
-// libpiper skips empty sentences and passes phonemes_aligned only when it differs from the regular phonemes.
-static void flush_sentence(int *sentence, strbuf *phonemes, strbuf *aligned)
+// libpiper skips empty sentences.
+static void flush_sentence(int *sentence, strbuf *phonemes)
 {
 	if (phonemes->len > 0) {
 		printf("  [sentence %d]\n", ++*sentence);
-		printf("    phonemes         = \"%s\"\n", phonemes->data);
-		if (aligned->len > 0 && strcmp(aligned->data, phonemes->data) != 0) {
-			printf("    phonemes_aligned = \"%s\"\n", aligned->data);
-		} else {
-			printf("    phonemes_aligned = (not passed, regular phonemes used)\n");
-		}
+		printf("    phonemes = \"%s\"\n", phonemes->data);
 		printf("\n");
 	}
 	strbuf_clear(phonemes);
-	strbuf_clear(aligned);
 }
 
 static const char *intonation_name(int term)
@@ -188,19 +184,18 @@ static int run_phoneme_mode(const char *lang, const char *text, int phonememode,
 	const void *textptr = text;
 	const char *clause_start = text;
 	strbuf sentence_phonemes = { NULL, 0, 0 };
-	strbuf sentence_phonemes_aligned = { NULL, 0, 0 };
 	int clause = 0;
 	int sentence = 0;
-	int total_words = 0;
 	int total_groups = 0;
+	int last_atom = 0;
 	int failures = 0;
 
 	// Same loop condition as libpiper: no CLAUSE_TYPE_EOF break, runs until the decoder is drained
 	while (textptr != NULL) {
 		int terminator = 0;
-		const char *word_phonemes = NULL;
+		espeak_PHONEME_WORDS words_out = { 0, NULL };
 
-		const char *phonemes = espeak_TextToPhonemesWithTerminator(&textptr, espeakCHARS_AUTO, phonememode, &terminator, &word_phonemes);
+		const char *phonemes = espeak_TextToPhonemesWithTerminator(&textptr, espeakCHARS_AUTO, phonememode, &terminator, &words_out);
 		const char *clause_end = (textptr != NULL) ? clause_end_of((const char *)textptr, clause_start) : NULL;
 
 		// Decode failure leaves textptr untouched: libpiper would spin here forever
@@ -211,53 +206,62 @@ static int run_phoneme_mode(const char *lang, const char *text, int phonememode,
 		}
 
 		int source_len = (clause_end != NULL) ? (int)(clause_end - clause_start) : (int)strlen(clause_start);
-		int words = count_source_words(clause_start, clause_end);
-		int groups = count_aligned_groups(word_phonemes);
-		total_words += words;
-		total_groups += groups;
+		int spaces = count_spaces(phonemes);
+		int groups_ok = (words_out.count == 0) ? (spaces == 0) : (words_out.count == spaces + 1);
+		total_groups += words_out.count;
 
 		printf("  [clause %d]\n", ++clause);
 		printf("    source       = \"%.*s\"\n", source_len, clause_start);
-		printf("    phonemes     = \"%s\"\n", phonemes     ? phonemes     : "(null)");
-		printf("    word_aligned = \"%s\"\n", word_phonemes ? word_phonemes : "(null)");
-		printf("    words        = %d source, %d aligned%s\n", words, groups, (words == groups) ? "" : "  <-- MISMATCH");
+		printf("    phonemes     = \"%s\"\n", phonemes);
+		printf("    groups       = %d for %d space(s)%s\n", words_out.count, spaces, groups_ok ? "" : "  <-- MISMATCH");
+		if (!groups_ok) {
+			failures++;
+		}
+
+		// group i is the text between the i-th and (i+1)-th space of the phonemes
+		const char *group = phonemes;
+		for (int i = 0; i < words_out.count; i++) {
+			const char *group_end = strchr(group, ' ');
+			int group_len = (group_end != NULL) ? (int)(group_end - group) : (int)strlen(group);
+			const char *source = words_out.sources[i];
+			const char *slice_end = clause_start + source_len;
+			int in_slice = (source >= clause_start && (source < slice_end || (source == clause_start && source_len == 0)));
+			// word sources come from the sourceix of a word's first char, so a space means the base is off
+			int on_word = (*source != '\0' && !isspace((unsigned char)*source));
+			int atom = atom_index(text, source);
+			const char *atom_text = atom_start(text, source);
+			const char *error = !in_slice ? "  <-- OUTSIDE CLAUSE" : !on_word ? "  <-- SOURCE ON SPACE" : (atom < last_atom) ? "  <-- ATOM BACKWARDS" : NULL;
+
+			printf("      [%d] \"%.*s\" -> atom %d \"%.*s\"%s\n", i, group_len, group, atom,
+			       (int)strcspn(atom_text, " "), atom_text, error ? error : "");
+			if (error) {
+				failures++;
+			}
+			last_atom = atom;
+			group = (group_end != NULL) ? group_end + 1 : group + group_len;
+		}
+
 		print_terminator(terminator);
 		printf("    remaining    = \"%s\"\n", textptr ? (const char *)textptr : "(end of input)");
 		printf("\n");
 
-		if (words != groups) {
-			failures++;
-		}
-
-		const char *term_str = terminator_str(terminator);
 		strbuf_append(&sentence_phonemes, phonemes);
-		if (word_phonemes != NULL) {
-			strbuf_append(&sentence_phonemes_aligned, word_phonemes);
-		}
-		strbuf_append(&sentence_phonemes, term_str);
-		strbuf_append(&sentence_phonemes_aligned, term_str);
+		strbuf_append(&sentence_phonemes, terminator_str(terminator));
 
 		if ((terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE) {
-			flush_sentence(&sentence, &sentence_phonemes, &sentence_phonemes_aligned);
+			flush_sentence(&sentence, &sentence_phonemes);
 		}
 
 		if (clause_end != NULL) {
 			clause_start = clause_end;
 		}
 	}
-	flush_sentence(&sentence, &sentence_phonemes, &sentence_phonemes_aligned);
+	flush_sentence(&sentence, &sentence_phonemes);
 
-	// Clause spans must tile the whole text, otherwise lookahead chars were dropped or counted twice
-	int text_words = count_source_words(text, NULL);
-	if (text_words != total_words) {
-		failures++;
-	}
-
-	printf("  summary: %d clause(s), %d sentence(s), words %d text / %d clauses / %d aligned, %d failure(s)\n\n",
-	       clause, sentence, text_words, total_words, total_groups, failures);
+	printf("  summary: %d clause(s), %d sentence(s), %d group(s), %d atom(s), %d failure(s)\n\n",
+	       clause, sentence, total_groups, atom_index(text, text + strlen(text)) + 1, failures);
 
 	free(sentence_phonemes.data);
-	free(sentence_phonemes_aligned.data);
 	return failures;
 }
 
@@ -271,6 +275,8 @@ int main(int argc, char **argv)
 		"We practise tai chi daily, graduated cum laude and went en masse.",
 		// numbers and abbreviations: one source word expanded to several phoneme words
 		"Mr. Smith bought 123 apples for 3.50 dollars in 2026.",
+		// an ellipsis without a space ends a clause inside an atom; double spaces give empty atoms
+		"Wait...what happened to  the dog?",
 	};
 	const char *const *texts = default_texts;
 	int n_texts = (int)(sizeof(default_texts) / sizeof(default_texts[0]));

@@ -557,6 +557,12 @@ char *WritePhMnemonicWithStress(char *phon_out, PHONEME_TAB *ph, PHONEME_LIST *p
 }
 ////
 
+// GetTranslatedPhonemeString writes a space before these word starts; GetPhonemeWordSources groups words by the same rule
+static int IsSpacedWordStart(const PHONEME_LIST *plist)
+{
+	return (plist->newword & PHLIST_START_OF_WORD) && !(plist->newword & (PHLIST_START_OF_SENTENCE | PHLIST_START_OF_CLAUSE));
+}
+
 const char *GetTranslatedPhonemeString(int phoneme_mode)
 {
 	/* Called after a clause has been translated into phonemes, in order
@@ -610,7 +616,7 @@ const char *GetTranslatedPhonemeString(int phoneme_mode)
 		plist = &phoneme_list[ix];
 
 		WritePhMnemonic(phon_buf2, plist->ph, plist, use_ipa, &flags);
-		if (plist->newword & PHLIST_START_OF_WORD && !(plist->newword & (PHLIST_START_OF_SENTENCE | PHLIST_START_OF_CLAUSE)))
+		if (IsSpacedWordStart(plist))
 			*buf++ = ' ';
 
 		if ((!plist->newword) || (separate_phonemes == ' ')) {
@@ -687,156 +693,87 @@ const char *GetTranslatedPhonemeString(int phoneme_mode)
 	return phon_out_buf;
 }
 
-static char *word_phon_out_buf = NULL;
-static unsigned int word_phon_out_size = 0;
+static const char *phoneme_word_sources[N_PHONEME_LIST];
 
-const char *GetWordAlignedPhonemeString(const char *regular, const char *clause_start, const char *clause_end, int source_base)
+// Start of char index of the clause slice, clamped to its last char; cursor caches the previous lookup
+static const char *SliceCharAt(const char *start, const char *end, int index, const char **cursor, int *cursor_ix)
 {
-	if (!regular || !clause_start) return regular;
+	if (index < *cursor_ix) {
+		*cursor = start;
+		*cursor_ix = 0;
+	}
 
-	// Step 1: collect 1-indexed char positions of whitespace-separated source words.
-	// sourceix & 0x7ff uses count_characters - clause_start_char, which is 1-indexed
-	// (count_characters is incremented before returning each character in ReadClause).
-	// We must count characters the same way: increment before checking, skip UTF-8
-	// continuation bytes (0x80-0xBF) so multi-byte chars count as one.
-	// source_base is the sourceix of the char at clause_start (ReadClauseSourceBase), so a word
-	// starting at char char_count gets source_base + char_count - 1.
-	int src_offsets[N_PHONEME_LIST];
-	int n_src = 0;
-	{
-		const char *p = clause_start;
-		int char_count = 0;
-		int in_word = 0;
-		while (*p != '\0' && (clause_end == NULL || p < clause_end)) {
-			unsigned char c = (unsigned char)*p;
-			if ((c & 0xC0) != 0x80) {
-				// First byte of a UTF-8 sequence (or plain ASCII).
-				char_count++; // 1-indexed, matches count_characters increment-before-return
-				if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-					in_word = 0;
-				} else {
-					if (!in_word) {
-						in_word = 1;
-						if (n_src < N_PHONEME_LIST)
-							src_offsets[n_src++] = source_base + char_count - 1;
-					}
+	while (*cursor_ix < index && **cursor != '\0') {
+		const char *next = *cursor + 1;
+		while (((unsigned char)*next & 0xC0) == 0x80) {
+			next++;
+		}
+		if (*next == '\0' || (end != NULL && next >= end)) {
+			break;
+		}
+		*cursor = next;
+		(*cursor_ix)++;
+	}
+
+	return *cursor;
+}
+
+int GetPhonemeWordSources(const char *clause_start, const char *clause_end, int source_base, const char *const **sources)
+{
+	// One source pointer per space-separated group of GetTranslatedPhonemeString, empty groups included.
+	// sourceix bits 0-10 count clause chars from source_base, the sourceix of the char at clause_start (ReadClauseSourceBase).
+	// A word espeak inserted itself (sourceix 0) continues the source of the previous group.
+	int n_groups = 0;
+	const char *cursor = clause_start;
+	int cursor_ix = 0;
+
+	*sources = phoneme_word_sources;
+	if (clause_start == NULL) {
+		return 0;
+	}
+
+	for (int ix = 1; ix < n_phoneme_list - 2 && n_groups < N_PHONEME_LIST; ix++) {
+		PHONEME_LIST *plist = &phoneme_list[ix];
+		if (!(plist->newword & PHLIST_START_OF_WORD)) {
+			continue;
+		}
+
+		int spaced = IsSpacedWordStart(plist);
+		if (n_groups > 0 && !spaced) {
+			continue; // no space written, so the word stays in the current group
+		}
+
+		int offset = (int)(plist->sourceix & 0x7ff);
+		const char *source;
+		if (offset > 0) {
+			source = SliceCharAt(clause_start, clause_end, offset - source_base, &cursor, &cursor_ix);
+			// a dot TranslateClause turned into a word break (non-final "etc. and") lends the next word its charix,
+			// which ReadClause took after skipping the spaces: the char before the word
+			while (*source == ' ' || *source == '\t' || *source == '\n' || *source == '\r') {
+				const char *next = SliceCharAt(clause_start, clause_end, cursor_ix + 1, &cursor, &cursor_ix);
+				if (next == source) {
+					break;
 				}
+				source = next;
 			}
-			p++;
+		} else {
+			source = (n_groups > 0) ? phoneme_word_sources[n_groups - 1] : clause_start;
 		}
-	}
 
-	// Step 2: collect phoneme-word char offsets from phoneme_list.
-	// sourceix is packed: bits 0-10 = 1-indexed clause-relative char count,
-	// bits 11-15 = word length. Extract the char count with & 0x7ff.
-	// Every START_OF_WORD is kept so phoneme words pair 1:1 with the IPA substrings of Step 3;
-	// a word espeak inserted itself (sourceix 0) continues the source word of the previous one.
-	int phon_offsets[N_PHONEME_LIST];
-	int n_phon = 0;
-	for (int ix = 1; ix < n_phoneme_list - 2 && n_phon < N_PHONEME_LIST; ix++) {
-		if (phoneme_list[ix].newword & PHLIST_START_OF_WORD) {
-			int offset = (int)(phoneme_list[ix].sourceix & 0x7ff);
-			phon_offsets[n_phon] = (offset > 0 || n_phon == 0) ? offset : phon_offsets[n_phon - 1];
-			n_phon++;
-		}
-	}
-	
-	if (n_src == 0 || n_phon == 0) return regular;
-
-	// Step 3: split the regular IPA string by ASCII spaces to get per-word substrings.
-	const char *ipa_starts[N_PHONEME_LIST];
-	int ipa_lens[N_PHONEME_LIST];
-	int n_ipa = 0;
-	{
-		const char *p = regular;
-		const char *ws = p;
-		while (1) {
-			if (*p == ' ' || *p == '\0') {
-				int len = (int)(p - ws);
-				if (len > 0 && n_ipa < N_PHONEME_LIST) {
-					ipa_starts[n_ipa] = ws;
-					ipa_lens[n_ipa] = len;
-					n_ipa++;
-				}
-				if (*p == '\0') break;
-				ws = p + 1;
+		// the group before the first space starts with the first word; a spaced first word also opens the next group
+		if (n_groups == 0) {
+			phoneme_word_sources[n_groups++] = source;
+			if (!spaced) {
+				continue;
 			}
-			p++;
+		}
+
+		if (n_groups < N_PHONEME_LIST) {
+			phoneme_word_sources[n_groups++] = source;
 		}
 	}
 
-	// Phoneme words without their own IPA substring cannot be placed: keep the regular string.
-	if (n_ipa != n_phon) return regular;
-
-	// Step 3.1: owner source word of each phoneme word = the one whose span contains its offset.
-	// Expanded numbers/abbreviations give several phoneme words per source word, merged words none.
-	// Owners only grow, so the aligned string is the regular one with separators added or removed only.
-	int owners[N_PHONEME_LIST];
-	int identity = (n_src == n_phon);
-	{
-		int si = 0;
-		for (int pi = 0; pi < n_phon; pi++) {
-			while (si + 1 < n_src && src_offsets[si + 1] <= phon_offsets[pi])
-				si++;
-			owners[pi] = si;
-			if (si != pi)
-				identity = 0;
-		}
-	}
-
-	// If word counts already match, no adjustment needed.
-	if (identity) return regular;
-
-	// Step 4: emit exactly one space-separated group per source word.
-	// For each source word: if it matches a phoneme word by char count, emit IPA + space;
-	// otherwise (merged/skipped) emit a bare space (empty slot at the exact position).
-	size_t reg_len = strlen(regular);
-	// Worst-case output: n_src trailing spaces (one per source word) + all IPA chars + null.
-	size_t needed = reg_len + (size_t)n_src + 2;
-
-	if (word_phon_out_size < (unsigned int)needed) {
-		char *nb = (char *)realloc(word_phon_out_buf, needed);
-		if (!nb) return regular;
-		word_phon_out_buf = nb;
-		word_phon_out_size = (unsigned int)needed;
-	}
-
-	char *out = word_phon_out_buf;
-	int si = 0, pi = 0, ii = 0;
-
-	while (si < n_src) {
-		// Matched source word -> emit its IPA substring + space.
-		// Further phoneme words of the same source word (expansion edge case) are joined
-		// without a separator, so they don't consume the next source word slot.
-		while (pi < n_phon && owners[pi] == si) {
-			if (ii < n_ipa) {
-				memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
-				out += ipa_lens[ii];
-				ii++;
-			}
-			pi++;
-		}
-		// Source word has no matching phoneme word (merged/skipped): bare space = empty slot.
-		*out++ = ' ';
-		si++;
-	}
-	// Emit any remaining phoneme words (safety net).
-	while (pi < n_phon) {
-		if (ii < n_ipa) {
-			memcpy(out, ipa_starts[ii], (size_t)ipa_lens[ii]);
-			out += ipa_lens[ii];
-			ii++;
-		}
-		*out++ = ' ';
-		pi++;
-	}
-
-	// Strip trailing space: format is IPA groups separated (not terminated) by spaces.
-	if (out > word_phon_out_buf && *(out - 1) == ' ')
-		out--;
-
-	*out = '\0';
-	return word_phon_out_buf;
+	return n_groups;
 }
 
 static int LetterGroupNo(char *rule)

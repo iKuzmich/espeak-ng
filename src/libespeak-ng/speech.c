@@ -918,7 +918,7 @@ static const char *StepBackUtf8Chars(const char *p, const char *limit, int count
 	return p;
 }
 
-ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr, int textmode, int phonememode, int* terminator, const char** word_phonemes_out)
+ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr, int textmode, int phonememode, int* terminator, espeak_PHONEME_WORDS* words_out)
 {
 	/* phoneme_mode
 	    bit 1:   0=eSpeak's ascii phoneme names, 1= International Phonetic Alphabet (as UTF-8 characters).
@@ -957,8 +957,13 @@ ESPEAK_API const char* espeak_TextToPhonemesWithTerminator(const void** textptr,
 
 	const char *phonemes = GetTranslatedPhonemeString(phonememode);
 
-	if (word_phonemes_out) {
-		*word_phonemes_out = GetWordAlignedPhonemeString(phonemes, clause_start, clause_end, ReadClauseSourceBase() + replayed_outside);
+	if (words_out) {
+		words_out->count = 0;
+		words_out->sources = NULL;
+		// a space separator or tie would split words into more groups than the word starts
+		if (((phonememode >> 8) & 0xffff) != ' ') {
+			words_out->count = GetPhonemeWordSources(clause_start, clause_end, ReadClauseSourceBase() + replayed_outside, &words_out->sources);
+		}
 	}
 
 	return phonemes;
